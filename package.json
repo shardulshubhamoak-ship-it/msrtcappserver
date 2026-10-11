@@ -1,0 +1,15 @@
+{
+  "name": "msrtc-st-bus-depot-qr-app",
+  "version": "1.0.0",
+  "description": "MSRTC ST Bus Depot & QR Management App - local server (serves index.html)",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=16"
+  },
+  "author": "Shardul Bhushan Oak",
+  "license": "UNLICENSED"
+}
