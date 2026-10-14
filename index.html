@@ -7017,8 +7017,9 @@ let camQr = null, camEl = null;
                 const e = Object.assign({}, data); delete e.id; delete e.uid;
                 Object.assign(e, { scanEpoch: Date.now(), serviceNo: data.serviceNo || 'N/A', depotName: currentUser.depotName, scanTimestamp: new Date().toLocaleString(), scannedBy: currentUser.username, verifiedBy: who.username, synced: false });
                 await dbPut('depotRegister', e);
-                updateLastScannedCard(data); renderDepotRegister(); playTrilingualAnnouncement(data);
+                updateLastScannedCard(data); renderDepotRegister();
                 logAudit(currentUser.username, 'Bus QR Scanned & Registered', 'SUCCESS', `Registered Bus ${data.busNo} at Platform ${data.platformNo}, verified by ${who.username}`);
+                askToAnnounceBus(data);
             } finally { scanBusy = false; }
         }
 
@@ -7031,8 +7032,9 @@ let camQr = null, camEl = null;
             `;
         }
 
-        function playTrilingualAnnouncement(b) {
+        function playTrilingualAnnouncement(b, rate) {
             if (!('speechSynthesis' in window)) return;
+            rate = rate || announceRate;
             window.speechSynthesis.cancel();
 
             // Language Priority: MARATHI -> HINDI -> ENGLISH
@@ -7050,7 +7052,7 @@ let camQr = null, camEl = null;
             utterEn.lang = 'en-US';
 
             // Sequential trilingual audio playback
-            [utterMr, utterHi, utterEn].forEach(u => { u.volume = 1; u.rate = 0.9; });
+            [utterMr, utterHi, utterEn].forEach(u => { u.volume = 1; u.rate = rate; });
             const pickVoice = lang => { const vs = window.speechSynthesis.getVoices() || [], l = lang.toLowerCase(), b = l.split('-')[0];
                 return vs.find(v => (v.lang || '').replace('_', '-').toLowerCase() === l) || vs.find(v => (v.lang || '').toLowerCase().startsWith(b)) || null; };
             // Marathi voice if installed, otherwise a Hindi (Devanagari) voice reads the Marathi text
@@ -7058,6 +7060,43 @@ let camQr = null, camEl = null;
             window.speechSynthesis.speak(utterMr);
             window.speechSynthesis.speak(utterHi);
             window.speechSynthesis.speak(utterEn);
+        }
+
+        let announceRate = 0.9; /* last chosen announcement speed (Slow 0.7 / Normal 0.9 / Fast 1.1) */
+        /* Right after a bus is registered, ask whether to announce it now */
+        function askToAnnounceBus(b) {
+            let m = document.getElementById('announceAskModal');
+            if (!m) {
+                m = document.createElement('div');
+                m.id = 'announceAskModal';
+                m.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4';
+                document.body.appendChild(m);
+            }
+            m.innerHTML = `
+                <div class="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5 text-center">
+                    <div class="text-4xl mb-2 text-emerald-600"><i class="fa-solid fa-circle-check"></i></div>
+                    <h3 class="font-bold text-slate-800 text-lg">Bus ${b.busNo} registered</h3>
+                    <p class="text-sm text-slate-600 mt-1">${b.route} | Platform ${b.platformNo}</p>
+                    <p class="text-sm font-semibold text-slate-800 mt-3">Do you want to announce this bus now?</p>
+                    <p class="text-xs font-bold text-slate-500 mt-3 mb-1.5">Announcement speed</p>
+                    <div id="announceSpeedRow" class="flex gap-2">
+                        ${[['Slow', 0.7], ['Normal', 0.9], ['Fast', 1.1]].map(([n, r]) => `<button type="button" data-rate="${r}" class="speed-opt flex-1 border-2 font-bold py-2 rounded text-sm ${r === announceRate ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-600'}">${n}</button>`).join('')}
+                    </div>
+                    <div class="flex gap-3 mt-4">
+                        <button id="announceNoBtn" class="flex-1 border border-slate-300 text-slate-700 font-bold py-2.5 rounded hover:bg-slate-50">No, Skip</button>
+                        <button id="announceYesBtn" class="flex-1 bg-amber-500 hover:bg-amber-600 text-white font-bold py-2.5 rounded"><i class="fa-solid fa-bullhorn"></i> Yes, Announce</button>
+                    </div>
+                </div>`;
+            const close = () => { m.remove(); };
+            m.querySelectorAll('.speed-opt').forEach(btn => btn.onclick = () => {
+                announceRate = parseFloat(btn.dataset.rate);
+                m.querySelectorAll('.speed-opt').forEach(x => {
+                    const on = x === btn;
+                    x.className = 'speed-opt flex-1 border-2 font-bold py-2 rounded text-sm ' + (on ? 'border-amber-500 bg-amber-50 text-amber-700' : 'border-slate-200 text-slate-600');
+                });
+            });
+            document.getElementById('announceNoBtn').onclick = close;
+            document.getElementById('announceYesBtn').onclick = () => { close(); playTrilingualAnnouncement(b, announceRate); };
         }
 
         function triggerManualAnnouncement() {
