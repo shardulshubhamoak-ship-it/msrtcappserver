@@ -5814,6 +5814,10 @@ return a / b;`,aie=`
                     <input type="password" id="loginPassword" autocomplete="current-password" placeholder="••••••••" class="w-full text-sm px-3 py-2.5 rounded-xl border border-slate-300 focus:ring-2 focus:ring-red-500 focus:outline-none">
                 </div>
 
+                <div id="forgotPwRow" class="text-right -mt-2">
+                    <button type="button" onclick="forgotPassword()" class="text-xs text-red-600 font-bold hover:underline">Forgot password?</button>
+                </div>
+
                 <!-- Anti-Spoof Real Face Biometric Scanner Box (Mandatory) -->
                 <div class="border border-slate-200 rounded-xl p-3 bg-slate-50 space-y-2">
                     <div class="flex items-center justify-between text-xs font-bold text-slate-700">
@@ -6411,6 +6415,52 @@ async function tplKey() {
             logAudit(user.username, 'Face Login Check', 'SUCCESS', 'Live face matched');
         }
 
+        /* Forgot password: live face must match the account, then a new password is set */
+        function askNewPassword() {
+            return new Promise(resolve => {
+                const m = document.createElement('div');
+                m.className = 'fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4';
+                m.innerHTML = `<div class="bg-white rounded-xl shadow-2xl w-full max-w-sm p-5">
+                    <h3 class="font-bold text-slate-800 text-lg text-center">Face verified \u2713</h3>
+                    <p class="text-xs text-slate-500 text-center mb-3">Set your new password</p>
+                    <input id="fpNew1" type="password" autocomplete="new-password" placeholder="New password" class="w-full text-sm px-3 py-2.5 rounded-xl border border-slate-300 mb-2">
+                    <input id="fpNew2" type="password" autocomplete="new-password" placeholder="Re-enter new password" class="w-full text-sm px-3 py-2.5 rounded-xl border border-slate-300">
+                    <p id="fpErr" class="text-xs text-red-600 font-semibold mt-2 min-h-[1rem]"></p>
+                    <div class="flex gap-3 mt-3">
+                        <button id="fpCancel" type="button" class="flex-1 border border-slate-300 text-slate-700 font-bold py-2.5 rounded">Cancel</button>
+                        <button id="fpSave" type="button" class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-2.5 rounded">Save Password</button>
+                    </div></div>`;
+                document.body.appendChild(m);
+                const done = v => { m.remove(); resolve(v); };
+                m.querySelector('#fpCancel').onclick = () => done(null);
+                m.querySelector('#fpSave').onclick = () => {
+                    const a = m.querySelector('#fpNew1').value, b = m.querySelector('#fpNew2').value;
+                    if (!a) { m.querySelector('#fpErr').textContent = 'Enter a new password.'; return; }
+                    if (a !== b) { m.querySelector('#fpErr').textContent = 'Passwords do not match.'; return; }
+                    done(a);
+                };
+            });
+        }
+        async function forgotPassword() {
+            const un = _e('loginUsername').value.trim().toUpperCase();
+            if (!un) { alert('Enter your username first, then tap "Forgot password?".'); return; }
+            if (!db) return;
+            const u = await dbGet('users', un);
+            if (!u || !u.faceTpl) { alert('No account with face data found for this username on this device.'); return; }
+            const r = await faceRun('Verify your face to reset password');
+            if (!r.ok) { alert(r.msg); return; }
+            if (!fmatch(r.desc, await openTpl(u.faceTpl))) {
+                alert('Face does not match. Password was not changed.');
+                logAudit(un, 'Password Reset Face Check', 'FAILED', 'Face did not match'); return;
+            }
+            const pw = await askNewPassword();
+            if (!pw) return;
+            u.password = sha256(pw); u.synced = false; await dbPut('users', u);
+            _e('loginPassword').value = '';
+            logAudit(un, 'Password Reset', 'SUCCESS', 'Password reset after live face match');
+            alert('Password changed successfully. You can now log in with your new password.');
+        }
+
         /* Account edit / delete authorisation: OTP (staff, online) or live face (offline / depot) */
         async function otpFlow(u) {
             const base = (localStorage.getItem('msrtc_server') || '').replace(/\/$/, '');
@@ -6427,12 +6477,20 @@ async function tplKey() {
             try { const j = await (await post('/otp/verify', { username: u.username, code: code.trim() })).json(); return !!j.ok; } catch (e) { return null; }
         }
         async function authorizeEdit() {
-            const u = currentUser;
-            if (u.role === 'Staff' && navigator.onLine && localStorage.getItem('msrtc_server')) {
-                const ok = await otpFlow(u);
-                if (ok !== null) { if (!ok) alert('OTP verification failed.'); return ok; }
-            }
+            /* Live face recognition is always required to change account information */
             return editAccFaceVerified || startEditAccFaceBiometric();
+        }
+        /* Live face re-check for the logged-in user (used for QR code edits) */
+        async function requireOwnFace(title, event) {
+            const r = await faceRun(title);
+            if (!r.ok) { alert(r.msg); return false; }
+            if (!currentUser || !fmatch(r.desc, await openTpl(currentUser.faceTpl))) {
+                alert('Face does not match. Change not allowed.');
+                logAudit(currentUser ? currentUser.username : 'UNKNOWN', event, 'FAILED', 'Face did not match');
+                return false;
+            }
+            logAudit(currentUser.username, event, 'SUCCESS', 'Live face matched');
+            return true;
         }
         async function startEditAccFaceBiometric() {
             const r = await faceRun('Re-verify your face to continue');
@@ -6511,6 +6569,7 @@ async function tplKey() {
 
         function toggleAuthMode(mode) {
             currentAuthMode = mode;
+            const fpRow = document.getElementById('forgotPwRow'); if (fpRow) fpRow.style.display = mode === 'login' ? '' : 'none';
             faceVerified = false; pendingFace = null; faceUser = '';
             document.getElementById('faceAuthStatus').textContent = "Not Verified";
             document.getElementById('faceAuthStatus').className = "text-red-600 font-semibold";
@@ -6669,7 +6728,7 @@ async function tplKey() {
             }
             await dbPut('users', upd); currentUser = upd; editAccFaceVerified = false;
             _e('headerUserName').textContent = upd.name; _e('headerUserRole').textContent = `${upd.role} (${upd.depotName})`;
-            logAudit(upd.username, 'Account Updated', 'SUCCESS', `Account edited (${old} -> ${nu}) with ${upd.role === 'Staff' && navigator.onLine && localStorage.getItem('msrtc_server') ? 'OTP' : 'face'} verification`);
+            logAudit(upd.username, 'Account Updated', 'SUCCESS', `Account edited (${old} -> ${nu}) with face verification`);
             alert('Your profile and account details have been updated successfully!');
             closeModal('manageAccountModal');
         }
@@ -7289,14 +7348,16 @@ let camQr = null, camEl = null;
             };
         }
 
-        function savePlatformNumberUpdate() {
+        async function savePlatformNumberUpdate() {
             const id = parseInt(document.getElementById('staffEditSelectQr').value);
             const newPlatform = document.getElementById('staffEditPlatformNo').value;
 
+            if (!id) { alert("Please choose a QR entry first!"); return; }
             if (!newPlatform) {
                 alert("Please specify a valid Platform Number!");
                 return;
             }
+            if (!(await requireOwnFace('Verify your face to edit this QR code', 'QR Edit Face Check'))) return;
 
             if (!db) return;
             const tx = db.transaction(['qrCodes'], 'readwrite');
